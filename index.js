@@ -3,6 +3,7 @@ require('dotenv').config(); // Import and configure dotenv
 const Discord = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const keep_alive = require('./keep_alive.js')
 
 const client = new Discord.Client();
 
