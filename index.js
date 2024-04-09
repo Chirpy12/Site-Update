@@ -9,13 +9,13 @@ const client = new Discord.Client();
 // Configuration
 const WEBSITES = [
     {
-        name: 'Site 1',
-        url: 'https://example1.com',
+        name: 'Nano Machine',
+        url: 'https://w16.machinenano.com/',
         selector: 'selector_for_latest_update_element_1'
     },
     {
-        name: 'Site 2',
-        url: 'https://example2.com',
+        name: 'Mount Hua Sect',
+        url: 'https://w1.return-ofthemounthuasect.com/',
         selector: 'selector_for_latest_update_element_2'
     },
     // Add more sites as needed
@@ -53,7 +53,7 @@ function checkForUpdates(html, selector) {
 
 // Function to send update message to Discord
 function sendUpdateMessage(siteName, updateText) {
-    const channel = client.channels.cache.get(CHANNEL_ID);
+    const channel = client.channels.cache.get(1227144104924676169);
     if (channel) {
         channel.send(`New update on ${siteName}: ${updateText}`);
     } else {
