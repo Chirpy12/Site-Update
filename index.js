@@ -1,3 +1,5 @@
+require('dotenv').config(); // Import and configure dotenv
+
 const Discord = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -79,4 +81,4 @@ client.on('ready', () => {
 });
 
 // Log in to Discord with your bot token
-client.login('YOUR_BOT_TOKEN'); // Replace with your bot token
+client.login(process.env.BOT_TOKEN); // Accessing bot token from environment variable
