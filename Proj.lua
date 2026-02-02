@@ -13,6 +13,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -51,16 +52,16 @@ table.sort(petItems, function(a, b)
 end)
 
 local COLORS = {
-	GreenHeader = Color3.fromRGB(88, 101, 242),
-	GreenLight = Color3.fromRGB(108, 121, 255),
-	BrownOuter = Color3.fromRGB(20, 22, 28),
-	BrownInner = Color3.fromRGB(28, 31, 40),
-	BrownDark = Color3.fromRGB(35, 39, 52),
-	BrownTile = Color3.fromRGB(45, 50, 66),
-	BeigeText = Color3.fromRGB(230, 233, 255),
-	RedClose = Color3.fromRGB(240, 70, 70),
-	Shadow = Color3.fromRGB(12, 12, 18),
-	Accent = Color3.fromRGB(0, 220, 255)
+	GreenHeader = Color3.fromRGB(59, 130, 246),   -- primary
+	GreenLight  = Color3.fromRGB(96, 165, 250),   -- primary light
+	BrownOuter  = Color3.fromRGB(15, 23, 42),     -- background
+	BrownInner  = Color3.fromRGB(17, 24, 39),     -- surface
+	BrownDark   = Color3.fromRGB(23, 32, 50),     -- surface alt
+	BrownTile   = Color3.fromRGB(30, 41, 59),     -- tile
+	BeigeText   = Color3.fromRGB(229, 231, 235),  -- text
+	RedClose    = Color3.fromRGB(239, 68, 68),    -- danger
+	Shadow      = Color3.fromRGB(10, 14, 24),     -- border
+	Accent      = Color3.fromRGB(34, 211, 238)    -- accent
 }
 
 local PetRegistry = require(ReplicatedStorage.Data.PetRegistry)
@@ -114,16 +115,6 @@ local function stroke(guiObj, color, thickness)
 	s.Transparency = 0.4
 	s.Parent = guiObj
 	return s
-end
-
-local function applyGradient(guiObj, c1, c2)
-	local grad = Instance.new("UIGradient")
-	grad.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, c1),
-		ColorSequenceKeypoint.new(1, c2)
-	})
-	grad.Rotation = 90
-	grad.Parent = guiObj
 end
 
 local function resolvePlayerFromBoothId(playerId)
@@ -329,46 +320,90 @@ gui.Parent = playerGui
 
 local openBtn = Instance.new("TextButton")
 openBtn.Name = "OpenPetMarket"
-openBtn.Size = UDim2.new(0, 170, 0, 44)
+openBtn.Size = UDim2.new(0, 170, 0, 42)
 openBtn.Position = UDim2.new(0, 20, 0, 80)
 openBtn.Text = "Pet Market"
 openBtn.BackgroundColor3 = COLORS.GreenHeader
 openBtn.TextColor3 = Color3.new(1, 1, 1)
 openBtn.Font = Enum.Font.GothamBlack
-openBtn.TextSize = 18
+openBtn.TextSize = 16
 openBtn.Parent = gui
-roundify(openBtn, 10)
-stroke(openBtn, Color3.fromRGB(40, 44, 60), 1)
-applyGradient(openBtn, COLORS.GreenHeader, COLORS.Accent)
+roundify(openBtn, 8)
+stroke(openBtn, COLORS.Shadow, 1)
 
 local marketFrame = Instance.new("Frame")
 marketFrame.Name = "MarketFrame"
-marketFrame.Size = UDim2.new(0.85, 0, 0.8, 0)
-marketFrame.Position = UDim2.new(0.075, 0, 0.1, 0)
+marketFrame.Size = UDim2.fromOffset(980, 620)
+marketFrame.Position = UDim2.new(0.5, -490, 0.5, -310)
 marketFrame.BackgroundColor3 = COLORS.BrownOuter
 marketFrame.Visible = false
 marketFrame.Parent = gui
 roundify(marketFrame, 12)
 stroke(marketFrame, COLORS.Shadow, 2)
 
+local sizeConstraint = Instance.new("UISizeConstraint")
+sizeConstraint.MinSize = Vector2.new(720, 460)
+sizeConstraint.MaxSize = Vector2.new(1200, 800)
+sizeConstraint.Parent = marketFrame
+
+local resizeHandle = Instance.new("TextButton")
+resizeHandle.Size = UDim2.new(0, 18, 0, 18)
+resizeHandle.Position = UDim2.new(1, -22, 1, -22)
+resizeHandle.BackgroundColor3 = COLORS.BrownTile
+resizeHandle.Text = "◢"
+resizeHandle.TextSize = 14
+resizeHandle.TextColor3 = COLORS.BeigeText
+resizeHandle.Font = Enum.Font.GothamBold
+resizeHandle.Parent = marketFrame
+roundify(resizeHandle, 4)
+stroke(resizeHandle, COLORS.Shadow, 1)
+resizeHandle.ZIndex = 60
+
+local resizing = false
+local startSize, startPos
+
+resizeHandle.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		resizing = true
+		startSize = marketFrame.AbsoluteSize
+		startPos = input.Position
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				resizing = false
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not resizing then
+		return
+	end
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - startPos
+		local newX = math.clamp(startSize.X + delta.X, sizeConstraint.MinSize.X, sizeConstraint.MaxSize.X)
+		local newY = math.clamp(startSize.Y + delta.Y, sizeConstraint.MinSize.Y, sizeConstraint.MaxSize.Y)
+		marketFrame.Size = UDim2.fromOffset(newX, newY)
+	end
+end)
+
 local headerFrame = Instance.new("Frame")
-headerFrame.Size = UDim2.new(1, -12, 0, 52)
+headerFrame.Size = UDim2.new(1, -12, 0, 50)
 headerFrame.Position = UDim2.new(0, 6, 0, 6)
-headerFrame.BackgroundColor3 = COLORS.GreenHeader
+headerFrame.BackgroundColor3 = COLORS.BrownInner
 headerFrame.Parent = marketFrame
 roundify(headerFrame, 10)
-stroke(headerFrame, Color3.fromRGB(40, 44, 60), 1)
+stroke(headerFrame, COLORS.Shadow, 1)
 headerFrame.ZIndex = 50
-applyGradient(headerFrame, COLORS.GreenHeader, COLORS.Accent)
 
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -80, 1, 0)
 title.Position = UDim2.new(0, 12, 0, 0)
 title.Text = "Pet Market"
-title.TextColor3 = Color3.new(1, 1, 1)
+title.TextColor3 = COLORS.BeigeText
 title.BackgroundTransparency = 1
 title.Font = Enum.Font.GothamBlack
-title.TextSize = 26
+title.TextSize = 22
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent = headerFrame
 title.ZIndex = 51
@@ -379,11 +414,11 @@ closeBtn.Position = UDim2.new(1, -52, 0.5, -20)
 closeBtn.Text = "X"
 closeBtn.TextColor3 = Color3.new(1, 1, 1)
 closeBtn.Font = Enum.Font.GothamBlack
-closeBtn.TextSize = 20
+closeBtn.TextSize = 18
 closeBtn.BackgroundColor3 = COLORS.RedClose
 closeBtn.Parent = headerFrame
 roundify(closeBtn, 8)
-stroke(closeBtn, Color3.fromRGB(120, 24, 20), 1)
+stroke(closeBtn, COLORS.Shadow, 1)
 closeBtn.ZIndex = 52
 
 local contentFrame = Instance.new("Frame")
@@ -392,7 +427,7 @@ contentFrame.Position = UDim2.new(0, 6, 0, 60)
 contentFrame.BackgroundColor3 = COLORS.BrownInner
 contentFrame.Parent = marketFrame
 roundify(contentFrame, 10)
-stroke(contentFrame, COLORS.Shadow, 2)
+stroke(contentFrame, COLORS.Shadow, 1)
 contentFrame.ClipsDescendants = false
 contentFrame.ZIndex = 1
 
@@ -419,7 +454,7 @@ local function makeSidebarButton(text, selected)
 	btn.Text = text
 	btn.TextColor3 = Color3.new(1, 1, 1)
 	btn.Font = Enum.Font.GothamBlack
-	btn.TextSize = 16
+	btn.TextSize = 15
 	btn.BackgroundColor3 = selected and COLORS.GreenLight or COLORS.BrownTile
 	btn.Parent = sidebar
 	roundify(btn, 8)
