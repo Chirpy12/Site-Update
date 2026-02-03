@@ -1,19 +1,9 @@
-repeat task.wait() until game:IsLoaded()
-repeat task.wait() until game:GetService("Players").LocalPlayer
-repeat task.wait() until game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
-task.wait(2)
-
-pcall(function()
-	if not isfile("PetMarketSettings.json") then
-		writefile("PetMarketSettings.json", "{}")
-	end
-end)
-
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -26,6 +16,7 @@ playerGui:SetAttribute("PetMarketUI_Loaded", true)
 local ReplicationReciever = require(ReplicatedStorage.Modules.ReplicationReciever)
 local TradeBoothsData = require(ReplicatedStorage.Data.TradeBoothsData)
 local BuyItemController = require(ReplicatedStorage.Modules.TradeBoothControllers.TradeBoothBuyItemController)
+local TradeEvents = ReplicatedStorage.GameEvents.TradeEvents
 
 local ItemNameFinder = require(ReplicatedStorage.Modules.ItemNameFinder)
 local ItemRarityFinder = require(ReplicatedStorage.Modules.ItemRarityFinder)
@@ -52,16 +43,16 @@ table.sort(petItems, function(a, b)
 end)
 
 local COLORS = {
-	GreenHeader = Color3.fromRGB(59, 130, 246),   -- primary
-	GreenLight  = Color3.fromRGB(96, 165, 250),   -- primary light
-	BrownOuter  = Color3.fromRGB(15, 23, 42),     -- background
-	BrownInner  = Color3.fromRGB(17, 24, 39),     -- surface
-	BrownDark   = Color3.fromRGB(23, 32, 50),     -- surface alt
-	BrownTile   = Color3.fromRGB(30, 41, 59),     -- tile
-	BeigeText   = Color3.fromRGB(229, 231, 235),  -- text
-	RedClose    = Color3.fromRGB(239, 68, 68),    -- danger
-	Shadow      = Color3.fromRGB(10, 14, 24),     -- border
-	Accent      = Color3.fromRGB(34, 211, 238)    -- accent
+	GreenHeader = Color3.fromRGB(60, 66, 79),
+	GreenLight = Color3.fromRGB(92, 100, 120),
+	BrownOuter = Color3.fromRGB(24, 26, 31),
+	BrownInner = Color3.fromRGB(30, 32, 38),
+	BrownDark = Color3.fromRGB(36, 39, 46),
+	BrownTile = Color3.fromRGB(44, 48, 58),
+	BeigeText = Color3.fromRGB(230, 232, 238),
+	RedClose = Color3.fromRGB(200, 70, 70),
+	Shadow = Color3.fromRGB(12, 13, 16),
+	Accent = Color3.fromRGB(110, 170, 255)
 }
 
 local PetRegistry = require(ReplicatedStorage.Data.PetRegistry)
@@ -117,6 +108,46 @@ local function stroke(guiObj, color, thickness)
 	return s
 end
 
+local function applyGradient(guiObj, c1, c2)
+	local grad = Instance.new("UIGradient")
+	grad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, c1),
+		ColorSequenceKeypoint.new(1, c2)
+	})
+	grad.Rotation = 90
+	grad.Parent = guiObj
+end
+
+local function applySoftPanelGradient(guiObj)
+	local grad = Instance.new("UIGradient")
+	grad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(210, 215, 225))
+	})
+	grad.Rotation = 90
+	grad.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.88),
+		NumberSequenceKeypoint.new(1, 1)
+	})
+	grad.Parent = guiObj
+end
+
+local function applyGameButtonStyle(btn)
+	btn.Font = Enum.Font.GothamBlack
+	btn.TextSize = 16
+	btn.TextColor3 = Color3.new(1, 1, 1)
+	roundify(btn, 10)
+	stroke(btn, Color3.fromRGB(15, 16, 20), 2)
+
+	local grad = Instance.new("UIGradient")
+	grad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(110, 170, 255)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(70, 90, 130))
+	})
+	grad.Rotation = 90
+	grad.Parent = btn
+end
+
 local function resolvePlayerFromBoothId(playerId)
 	if type(playerId) ~= "string" then
 		return nil
@@ -135,6 +166,10 @@ end
 
 local function getScreenGui(instance)
 	return instance:FindFirstAncestorOfClass("ScreenGui")
+end
+
+local function getDropdownTextNodes(btn)
+	return btn:FindFirstChild("Label"), btn:FindFirstChild("Placeholder")
 end
 
 -- Local settings (client-only)
@@ -181,7 +216,11 @@ local function sendWebhookEmbed(embed)
 		return
 	end
 
-	local payload = { embeds = { embed } }
+	local payload = {
+		username = "The Sniper",
+		avatar_url = "https://cdn.dribbble.com/userupload/4992412/file/original-c9c1e9a0a294e0d3d07709ec0f6fe643.jpg?resize=752x&vertical=center",
+		embeds = { embed }
+	}
 
 	pcall(function()
 		req({
@@ -210,6 +249,7 @@ local function registerPendingPurchase(listingObj)
 end
 
 local buyDebounce = false
+
 local function promptBuyWithRetry(listing, marketFrame)
 	if buyDebounce then
 		return
@@ -236,6 +276,45 @@ local function promptBuyWithRetry(listing, marketFrame)
 		BuyItemController:PromptBuyListing(listing, screenGui)
 		buyDebounce = false
 	end)
+end
+
+local autoBuyCooldown = false
+local autoBuyCooldownTime = 0.4
+local autoBuyMaxRetries = 2
+
+local function tryAutoBuyDirect(listingObj, marketFrame)
+	if autoBuyCooldown then
+		return false
+	end
+	autoBuyCooldown = true
+	task.delay(autoBuyCooldownTime, function()
+		autoBuyCooldown = false
+	end)
+
+	if not listingObj or not listingObj.listingOwner or not listingObj.listingUUID then
+		return false
+	end
+
+	for attempt = 1, autoBuyMaxRetries do
+		local success, message = TradeEvents.Booths.BuyListing:InvokeServer(
+			listingObj.listingOwner,
+			listingObj.listingUUID
+		)
+
+		if success then
+			registerPendingPurchase(listingObj)
+			return true
+		end
+
+		warn(("Auto-buy failed (attempt %d): %s"):format(attempt, tostring(message)))
+		task.wait(0.15)
+	end
+
+	if marketFrame then
+		promptBuyWithRetry(listingObj, marketFrame)
+	end
+
+	return false
 end
 
 -- Server hop logic (min player filter)
@@ -318,92 +397,98 @@ gui.Name = "PetMarketUI"
 gui.ResetOnSpawn = false
 gui.Parent = playerGui
 
+local uiScale = Instance.new("UIScale")
+uiScale.Parent = gui
+
+local function updateUIScale()
+	local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+	local scale = math.min(viewport.X / 1280, viewport.Y / 720)
+	uiScale.Scale = math.clamp(scale, 0.7, 1.35)
+end
+
+updateUIScale()
+if workspace.CurrentCamera then
+	workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(updateUIScale)
+end
+
 local openBtn = Instance.new("TextButton")
 openBtn.Name = "OpenPetMarket"
-openBtn.Size = UDim2.new(0, 170, 0, 42)
+openBtn.Size = UDim2.new(0, 180, 0, 48)
 openBtn.Position = UDim2.new(0, 20, 0, 80)
 openBtn.Text = "Pet Market"
 openBtn.BackgroundColor3 = COLORS.GreenHeader
 openBtn.TextColor3 = Color3.new(1, 1, 1)
 openBtn.Font = Enum.Font.GothamBlack
-openBtn.TextSize = 16
+openBtn.TextSize = 18
 openBtn.Parent = gui
-roundify(openBtn, 8)
-stroke(openBtn, COLORS.Shadow, 1)
+applyGameButtonStyle(openBtn)
 
-local marketFrame = Instance.new("Frame")
-marketFrame.Name = "MarketFrame"
-marketFrame.Size = UDim2.fromOffset(980, 620)
-marketFrame.Position = UDim2.new(0.5, -490, 0.5, -310)
-marketFrame.BackgroundColor3 = COLORS.BrownOuter
-marketFrame.Visible = false
-marketFrame.Parent = gui
-roundify(marketFrame, 12)
-stroke(marketFrame, COLORS.Shadow, 2)
+-- Draggable button
+local dragging = false
+local dragStart
+local startPos
 
-local sizeConstraint = Instance.new("UISizeConstraint")
-sizeConstraint.MinSize = Vector2.new(720, 460)
-sizeConstraint.MaxSize = Vector2.new(1200, 800)
-sizeConstraint.Parent = marketFrame
+openBtn.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = openBtn.Position
 
-local resizeHandle = Instance.new("TextButton")
-resizeHandle.Size = UDim2.new(0, 18, 0, 18)
-resizeHandle.Position = UDim2.new(1, -22, 1, -22)
-resizeHandle.BackgroundColor3 = COLORS.BrownTile
-resizeHandle.Text = "◢"
-resizeHandle.TextSize = 14
-resizeHandle.TextColor3 = COLORS.BeigeText
-resizeHandle.Font = Enum.Font.GothamBold
-resizeHandle.Parent = marketFrame
-roundify(resizeHandle, 4)
-stroke(resizeHandle, COLORS.Shadow, 1)
-resizeHandle.ZIndex = 60
-
-local resizing = false
-local startSize, startPos
-
-resizeHandle.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		resizing = true
-		startSize = marketFrame.AbsoluteSize
-		startPos = input.Position
 		input.Changed:Connect(function()
 			if input.UserInputState == Enum.UserInputState.End then
-				resizing = false
+				dragging = false
 			end
 		end)
 	end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-	if not resizing then
-		return
-	end
-	if input.UserInputType == Enum.UserInputType.MouseMovement then
-		local delta = input.Position - startPos
-		local newX = math.clamp(startSize.X + delta.X, sizeConstraint.MinSize.X, sizeConstraint.MaxSize.X)
-		local newY = math.clamp(startSize.Y + delta.Y, sizeConstraint.MinSize.Y, sizeConstraint.MaxSize.Y)
-		marketFrame.Size = UDim2.fromOffset(newX, newY)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		local delta = input.Position - dragStart
+		openBtn.Position = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
 	end
 end)
 
+local marketFrame = Instance.new("Frame")
+marketFrame.Name = "MarketFrame"
+marketFrame.Size = UDim2.new(0.9, 0, 0.85, 0)
+marketFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+marketFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+marketFrame.BackgroundColor3 = COLORS.BrownOuter
+marketFrame.Visible = false
+marketFrame.Parent = gui
+roundify(marketFrame, 12)
+stroke(marketFrame, Color3.fromRGB(10, 10, 12), 2)
+
+local marketSizeClamp = Instance.new("UISizeConstraint")
+marketSizeClamp.MinSize = Vector2.new(820, 520)
+marketSizeClamp.MaxSize = Vector2.new(1400, 900)
+marketSizeClamp.Parent = marketFrame
+
 local headerFrame = Instance.new("Frame")
-headerFrame.Size = UDim2.new(1, -12, 0, 50)
+headerFrame.Size = UDim2.new(1, -12, 0, 52)
 headerFrame.Position = UDim2.new(0, 6, 0, 6)
-headerFrame.BackgroundColor3 = COLORS.BrownInner
+headerFrame.BackgroundColor3 = COLORS.GreenHeader
 headerFrame.Parent = marketFrame
 roundify(headerFrame, 10)
-stroke(headerFrame, COLORS.Shadow, 1)
+stroke(headerFrame, Color3.fromRGB(40, 44, 60), 1)
 headerFrame.ZIndex = 50
+applyGradient(headerFrame, COLORS.GreenHeader, COLORS.Accent)
+applySoftPanelGradient(headerFrame)
 
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -80, 1, 0)
 title.Position = UDim2.new(0, 12, 0, 0)
 title.Text = "Pet Market"
-title.TextColor3 = COLORS.BeigeText
+title.TextColor3 = Color3.new(1, 1, 1)
 title.BackgroundTransparency = 1
 title.Font = Enum.Font.GothamBlack
-title.TextSize = 22
+title.TextSize = 26
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent = headerFrame
 title.ZIndex = 51
@@ -414,11 +499,11 @@ closeBtn.Position = UDim2.new(1, -52, 0.5, -20)
 closeBtn.Text = "X"
 closeBtn.TextColor3 = Color3.new(1, 1, 1)
 closeBtn.Font = Enum.Font.GothamBlack
-closeBtn.TextSize = 18
+closeBtn.TextSize = 20
 closeBtn.BackgroundColor3 = COLORS.RedClose
 closeBtn.Parent = headerFrame
 roundify(closeBtn, 8)
-stroke(closeBtn, COLORS.Shadow, 1)
+stroke(closeBtn, Color3.fromRGB(120, 24, 20), 1)
 closeBtn.ZIndex = 52
 
 local contentFrame = Instance.new("Frame")
@@ -427,7 +512,7 @@ contentFrame.Position = UDim2.new(0, 6, 0, 60)
 contentFrame.BackgroundColor3 = COLORS.BrownInner
 contentFrame.Parent = marketFrame
 roundify(contentFrame, 10)
-stroke(contentFrame, COLORS.Shadow, 1)
+stroke(contentFrame, Color3.fromRGB(18, 20, 25), 2)
 contentFrame.ClipsDescendants = false
 contentFrame.ZIndex = 1
 
@@ -438,8 +523,9 @@ sidebar.Position = UDim2.new(0, 6, 0, 6)
 sidebar.BackgroundColor3 = COLORS.BrownDark
 sidebar.Parent = contentFrame
 roundify(sidebar, 10)
-stroke(sidebar, COLORS.Shadow, 2)
+stroke(sidebar, Color3.fromRGB(20, 22, 26), 1.5)
 sidebar.ZIndex = 2
+applySoftPanelGradient(sidebar)
 
 local sidebarList = Instance.new("UIListLayout")
 sidebarList.Padding = UDim.new(0, 8)
@@ -454,7 +540,7 @@ local function makeSidebarButton(text, selected)
 	btn.Text = text
 	btn.TextColor3 = Color3.new(1, 1, 1)
 	btn.Font = Enum.Font.GothamBlack
-	btn.TextSize = 15
+	btn.TextSize = 16
 	btn.BackgroundColor3 = selected and COLORS.GreenLight or COLORS.BrownTile
 	btn.Parent = sidebar
 	roundify(btn, 8)
@@ -562,18 +648,158 @@ tabs["Server Hop"].MouseButton1Click:Connect(function()
 	setTab("Server Hop")
 end)
 
--- Auto-buy UI
-local autoBuyTitle = Instance.new("TextLabel")
-autoBuyTitle.Size = UDim2.new(1, -200, 0, 40)
-autoBuyTitle.Position = UDim2.new(0, 186, 0, 12)
-autoBuyTitle.Text = "Auto-buy Entries"
-autoBuyTitle.TextColor3 = COLORS.BeigeText
-autoBuyTitle.BackgroundTransparency = 1
-autoBuyTitle.Font = Enum.Font.GothamBlack
-autoBuyTitle.TextSize = 22
-autoBuyTitle.TextXAlignment = Enum.TextXAlignment.Left
-autoBuyTitle.Parent = autoBuyTab
+-- Icon headers
+local function makeTabHeader(parent, text, iconId)
+	local header = Instance.new("Frame")
+	header.Size = UDim2.new(1, -200, 0, 42)
+	header.Position = UDim2.new(0, 186, 0, 10)
+	header.BackgroundTransparency = 1
+	header.Parent = parent
 
+	local icon = Instance.new("ImageLabel")
+	icon.Size = UDim2.new(0, 26, 0, 26)
+	icon.Position = UDim2.new(0, 0, 0.5, -13)
+	icon.BackgroundTransparency = 1
+	icon.Image = "rbxassetid://" .. tostring(iconId)
+	icon.Parent = header
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, -36, 1, 0)
+	label.Position = UDim2.new(0, 34, 0, 0)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = COLORS.BeigeText
+	label.Font = Enum.Font.GothamBlack
+	label.TextSize = 22
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = header
+
+	return header
+end
+
+makeTabHeader(petsTab, "Pet Market", 6031280882)
+makeTabHeader(autoBuyTab, "Auto-buy", 6031280884)
+makeTabHeader(webhooksTab, "Webhooks", 6031280886)
+makeTabHeader(settingsTab, "Settings", 6031280887)
+makeTabHeader(serverHopTab, "Server Hop", 6031280888)
+
+local hopBtn = Instance.new("TextButton")
+hopBtn.Size = UDim2.new(0, 180, 0, 44)
+hopBtn.Position = UDim2.new(0, 186, 0, 60)
+hopBtn.Text = "Hop Now"
+hopBtn.TextColor3 = Color3.new(1, 1, 1)
+hopBtn.Font = Enum.Font.GothamBlack
+hopBtn.TextSize = 14
+hopBtn.BackgroundColor3 = COLORS.GreenLight
+hopBtn.Parent = serverHopTab
+applyGameButtonStyle(hopBtn)
+
+local autoToggle = Instance.new("TextButton")
+autoToggle.Size = UDim2.new(0, 200, 0, 44)
+autoToggle.Position = UDim2.new(0, 376, 0, 60)
+autoToggle.Text = "Auto Hop: OFF"
+autoToggle.TextColor3 = Color3.new(1, 1, 1)
+autoToggle.Font = Enum.Font.GothamBlack
+autoToggle.TextSize = 14
+autoToggle.BackgroundColor3 = COLORS.BrownTile
+autoToggle.Parent = serverHopTab
+roundify(autoToggle, 8)
+stroke(autoToggle, COLORS.Shadow, 1)
+
+local hopIntervalBox = Instance.new("TextBox")
+hopIntervalBox.Size = UDim2.new(0, 160, 0, 44)
+hopIntervalBox.Position = UDim2.new(0, 586, 0, 60)
+hopIntervalBox.PlaceholderText = "Interval (sec)"
+hopIntervalBox.Text = tostring(settings.hopInterval or 30)
+hopIntervalBox.BackgroundColor3 = COLORS.BrownTile
+hopIntervalBox.TextColor3 = COLORS.BeigeText
+hopIntervalBox.PlaceholderColor3 = Color3.fromRGB(220, 210, 190)
+hopIntervalBox.Font = Enum.Font.GothamBold
+hopIntervalBox.TextSize = 14
+hopIntervalBox.ClearTextOnFocus = false
+hopIntervalBox.Parent = serverHopTab
+roundify(hopIntervalBox, 8)
+stroke(hopIntervalBox, COLORS.Shadow, 1)
+
+local hopStatus = Instance.new("TextLabel")
+hopStatus.Size = UDim2.new(1, -200, 0, 22)
+hopStatus.Position = UDim2.new(0, 186, 0, 110)
+hopStatus.Text = ""
+hopStatus.TextColor3 = Color3.fromRGB(180, 255, 180)
+hopStatus.BackgroundTransparency = 1
+hopStatus.Font = Enum.Font.GothamBold
+hopStatus.TextSize = 12
+hopStatus.TextXAlignment = Enum.TextXAlignment.Left
+hopStatus.Parent = serverHopTab
+
+local function parseInterval()
+	local n = tonumber(hopIntervalBox.Text)
+	if not n or n < 5 then
+		return 30
+	end
+	return n
+end
+
+local autoHopOn = settings.autoHopOn or false
+local autoHopThread = nil
+
+hopBtn.MouseButton1Click:Connect(function()
+	hopStatus.Text = "Hopping..."
+	TeleportOnce()
+end)
+
+autoToggle.MouseButton1Click:Connect(function()
+	autoHopOn = not autoHopOn
+	autoToggle.Text = autoHopOn and "Auto Hop: ON" or "Auto Hop: OFF"
+	autoToggle.BackgroundColor3 = autoHopOn and COLORS.GreenLight or COLORS.BrownTile
+	settings.autoHopOn = autoHopOn
+	settings.hopInterval = parseInterval()
+	saveLocalSettings(settings)
+
+	if autoHopOn then
+		if autoHopThread then
+			task.cancel(autoHopThread)
+		end
+		autoHopThread = task.spawn(function()
+			while autoHopOn do
+				task.wait(parseInterval())
+				if autoHopOn then
+					hopStatus.Text = "Auto hopping..."
+					TeleportOnce()
+				end
+			end
+		end)
+	else
+		if autoHopThread then
+			task.cancel(autoHopThread)
+			autoHopThread = nil
+		end
+	end
+end)
+
+hopIntervalBox.FocusLost:Connect(function()
+	if hopIntervalBox.Text == "" then
+		hopIntervalBox.Text = "30"
+	end
+	settings.hopInterval = parseInterval()
+	saveLocalSettings(settings)
+end)
+
+if autoHopOn then
+	autoToggle.Text = "Auto Hop: ON"
+	autoToggle.BackgroundColor3 = COLORS.GreenLight
+	autoHopThread = task.spawn(function()
+		while autoHopOn do
+			task.wait(parseInterval())
+			if autoHopOn then
+				hopStatus.Text = "Auto hopping..."
+				TeleportOnce()
+			end
+		end
+	end)
+end
+
+-- Auto-buy UI
 local autoBuyToggle = Instance.new("TextButton")
 autoBuyToggle.Size = UDim2.new(0, 180, 0, 40)
 autoBuyToggle.Position = UDim2.new(0, 186, 0, 58)
@@ -701,19 +927,39 @@ local function addAutoBuyEntry(entryData)
 	roundify(row, 8)
 	stroke(row, COLORS.Shadow, 1)
 
-	local petBox = Instance.new("TextBox")
+	local petBox = Instance.new("TextButton")
 	petBox.Size = UDim2.new(0.45, -6, 1, -8)
 	petBox.Position = UDim2.new(0, 6, 0, 4)
-	petBox.PlaceholderText = "Pet"
-	petBox.Text = entry.petText
+	petBox.Text = ""
 	petBox.BackgroundColor3 = COLORS.BrownDark
-	petBox.TextColor3 = COLORS.BeigeText
-	petBox.Font = Enum.Font.GothamBold
-	petBox.TextSize = 12
-	petBox.ClearTextOnFocus = false
 	petBox.Parent = row
 	roundify(petBox, 6)
 	stroke(petBox, COLORS.Shadow, 1)
+
+	local petLabel = Instance.new("TextLabel")
+	petLabel.Name = "Label"
+	petLabel.Size = UDim2.new(1, -10, 1, 0)
+	petLabel.Position = UDim2.new(0, 6, 0, 0)
+	petLabel.BackgroundTransparency = 1
+	petLabel.Text = entry.petText or ""
+	petLabel.TextColor3 = COLORS.BeigeText
+	petLabel.Font = Enum.Font.GothamBold
+	petLabel.TextSize = 12
+	petLabel.TextXAlignment = Enum.TextXAlignment.Left
+	petLabel.Parent = petBox
+
+	local petPlaceholder = Instance.new("TextLabel")
+	petPlaceholder.Name = "Placeholder"
+	petPlaceholder.Size = UDim2.new(1, -10, 1, 0)
+	petPlaceholder.Position = UDim2.new(0, 6, 0, 0)
+	petPlaceholder.BackgroundTransparency = 1
+	petPlaceholder.Text = "Pet"
+	petPlaceholder.TextColor3 = Color3.fromRGB(220, 210, 190)
+	petPlaceholder.Font = Enum.Font.GothamBold
+	petPlaceholder.TextSize = 12
+	petPlaceholder.TextXAlignment = Enum.TextXAlignment.Left
+	petPlaceholder.Visible = (petLabel.Text == "")
+	petPlaceholder.Parent = petBox
 
 	local minBox = Instance.new("TextBox")
 	minBox.Size = UDim2.new(0.2, -6, 1, -8)
@@ -774,11 +1020,11 @@ local function addAutoBuyEntry(entryData)
 	dropdownLayout.Parent = dropdown
 	dropdownLayout.Padding = UDim.new(0, 4)
 
-	local function addPetOption(label)
+	local function addPetOption(labelText)
 		local btn = Instance.new("TextButton")
 		btn.Size = UDim2.new(1, -8, 0, 22)
 		btn.Position = UDim2.new(0, 4, 0, 0)
-		btn.Text = label
+		btn.Text = labelText
 		btn.TextColor3 = COLORS.BeigeText
 		btn.Font = Enum.Font.GothamBold
 		btn.TextSize = 12
@@ -788,8 +1034,10 @@ local function addAutoBuyEntry(entryData)
 		stroke(btn, COLORS.Shadow, 1)
 		btn.ZIndex = 51
 		btn.MouseButton1Click:Connect(function()
-			petBox.Text = label
-			entry.petText = label
+			local labelNode, placeholderNode = getDropdownTextNodes(petBox)
+			labelNode.Text = labelText
+			placeholderNode.Visible = (labelNode.Text == "")
+			entry.petText = labelText
 			dropdown.Visible = false
 			saveAutoBuySettings()
 		end)
@@ -799,15 +1047,8 @@ local function addAutoBuyEntry(entryData)
 		addPetOption(entryItem.displayName)
 	end
 
-	petBox.Focused:Connect(function()
+	petBox.Activated:Connect(function()
 		dropdown.Visible = true
-	end)
-	petBox.FocusLost:Connect(function()
-		task.delay(0.1, function()
-			dropdown.Visible = false
-			entry.petText = petBox.Text or ""
-			saveAutoBuySettings()
-		end)
 	end)
 
 	minBox.FocusLost:Connect(function()
@@ -926,7 +1167,7 @@ local function runAutoBuy(listings)
 				if entryMatchesListing(entry, listingObj) then
 					autoBuySeen[listingObj.listingUUID] = true
 					autoBuyStatus.Text = "Auto-buy: " .. (ItemNameFinder(listingObj.data.PetType, "Pet") or "Pet")
-					promptBuyWithRetry(listingObj, contentFrame)
+					tryAutoBuyDirect(listingObj, contentFrame)
 					break
 				end
 			end
@@ -984,135 +1225,6 @@ if autoBuyEnabled then
 	startAutoBuyLoop()
 end
 
--- Server Hop UI
-local hopTitle = Instance.new("TextLabel")
-hopTitle.Size = UDim2.new(1, -200, 0, 40)
-hopTitle.Position = UDim2.new(0, 186, 0, 12)
-hopTitle.Text = "Server Hop"
-hopTitle.TextColor3 = COLORS.BeigeText
-hopTitle.BackgroundTransparency = 1
-hopTitle.Font = Enum.Font.GothamBlack
-hopTitle.TextSize = 22
-hopTitle.TextXAlignment = Enum.TextXAlignment.Left
-hopTitle.Parent = serverHopTab
-
-local hopBtn = Instance.new("TextButton")
-hopBtn.Size = UDim2.new(0, 180, 0, 44)
-hopBtn.Position = UDim2.new(0, 186, 0, 60)
-hopBtn.Text = "Hop Now"
-hopBtn.TextColor3 = Color3.new(1, 1, 1)
-hopBtn.Font = Enum.Font.GothamBlack
-hopBtn.TextSize = 14
-hopBtn.BackgroundColor3 = COLORS.GreenLight
-hopBtn.Parent = serverHopTab
-roundify(hopBtn, 8)
-stroke(hopBtn, COLORS.Shadow, 1)
-
-local autoToggle = Instance.new("TextButton")
-autoToggle.Size = UDim2.new(0, 200, 0, 44)
-autoToggle.Position = UDim2.new(0, 376, 0, 60)
-autoToggle.Text = "Auto Hop: OFF"
-autoToggle.TextColor3 = Color3.new(1, 1, 1)
-autoToggle.Font = Enum.Font.GothamBlack
-autoToggle.TextSize = 14
-autoToggle.BackgroundColor3 = COLORS.BrownTile
-autoToggle.Parent = serverHopTab
-roundify(autoToggle, 8)
-stroke(autoToggle, COLORS.Shadow, 1)
-
-local hopIntervalBox = Instance.new("TextBox")
-hopIntervalBox.Size = UDim2.new(0, 160, 0, 44)
-hopIntervalBox.Position = UDim2.new(0, 586, 0, 60)
-hopIntervalBox.PlaceholderText = "Interval (sec)"
-hopIntervalBox.Text = tostring(settings.hopInterval or 30)
-hopIntervalBox.BackgroundColor3 = COLORS.BrownTile
-hopIntervalBox.TextColor3 = COLORS.BeigeText
-hopIntervalBox.PlaceholderColor3 = Color3.fromRGB(220, 210, 190)
-hopIntervalBox.Font = Enum.Font.GothamBold
-hopIntervalBox.TextSize = 14
-hopIntervalBox.ClearTextOnFocus = false
-hopIntervalBox.Parent = serverHopTab
-roundify(hopIntervalBox, 8)
-stroke(hopIntervalBox, COLORS.Shadow, 1)
-
-local hopStatus = Instance.new("TextLabel")
-hopStatus.Size = UDim2.new(1, -200, 0, 22)
-hopStatus.Position = UDim2.new(0, 186, 0, 110)
-hopStatus.Text = ""
-hopStatus.TextColor3 = Color3.fromRGB(180, 255, 180)
-hopStatus.BackgroundTransparency = 1
-hopStatus.Font = Enum.Font.GothamBold
-hopStatus.TextSize = 12
-hopStatus.TextXAlignment = Enum.TextXAlignment.Left
-hopStatus.Parent = serverHopTab
-
-local function parseInterval()
-	local n = tonumber(hopIntervalBox.Text)
-	if not n or n < 5 then
-		return 30
-	end
-	return n
-end
-
-local autoHopOn = settings.autoHopOn or false
-local autoHopThread = nil
-
-hopBtn.MouseButton1Click:Connect(function()
-	hopStatus.Text = "Hopping..."
-	TeleportOnce()
-end)
-
-autoToggle.MouseButton1Click:Connect(function()
-	autoHopOn = not autoHopOn
-	autoToggle.Text = autoHopOn and "Auto Hop: ON" or "Auto Hop: OFF"
-	autoToggle.BackgroundColor3 = autoHopOn and COLORS.GreenLight or COLORS.BrownTile
-	settings.autoHopOn = autoHopOn
-	settings.hopInterval = parseInterval()
-	saveLocalSettings(settings)
-
-	if autoHopOn then
-		if autoHopThread then
-			task.cancel(autoHopThread)
-		end
-		autoHopThread = task.spawn(function()
-			while autoHopOn do
-				task.wait(parseInterval())
-				if autoHopOn then
-					hopStatus.Text = "Auto hopping..."
-					TeleportOnce()
-				end
-			end
-		end)
-	else
-		if autoHopThread then
-			task.cancel(autoHopThread)
-			autoHopThread = nil
-		end
-	end
-end)
-
-hopIntervalBox.FocusLost:Connect(function()
-	if hopIntervalBox.Text == "" then
-		hopIntervalBox.Text = "30"
-	end
-	settings.hopInterval = parseInterval()
-	saveLocalSettings(settings)
-end)
-
-if autoHopOn then
-	autoToggle.Text = "Auto Hop: ON"
-	autoToggle.BackgroundColor3 = COLORS.GreenLight
-	autoHopThread = task.spawn(function()
-		while autoHopOn do
-			task.wait(parseInterval())
-			if autoHopOn then
-				hopStatus.Text = "Auto hopping..."
-				TeleportOnce()
-			end
-		end
-	end)
-end
-
 -- Filter bar (Pets tab)
 local filterBar = Instance.new("Frame")
 filterBar.Size = UDim2.new(1, -194, 0, 46)
@@ -1123,31 +1235,83 @@ roundify(filterBar, 8)
 stroke(filterBar, COLORS.Shadow, 1)
 filterBar.ZIndex = 10
 filterBar.ClipsDescendants = false
+applySoftPanelGradient(filterBar)
 
-local function makeBox(name, size, pos, placeholder)
-	local box = Instance.new("TextBox")
-	box.Name = name
-	box.Size = size
-	box.Position = pos
-	box.PlaceholderText = placeholder
-	box.Text = ""
-	box.BackgroundColor3 = COLORS.BrownTile
-	box.TextColor3 = COLORS.BeigeText
-	box.PlaceholderColor3 = Color3.fromRGB(220, 210, 190)
-	box.Font = Enum.Font.GothamBold
-	box.TextSize = 14
-	box.ClearTextOnFocus = false
-	box.Parent = filterBar
-	roundify(box, 6)
-	stroke(box, COLORS.Shadow, 1)
-	box.ZIndex = 11
-	return box
+local function makeDropdownButton(name, size, pos, placeholder)
+	local btn = Instance.new("TextButton")
+	btn.Name = name
+	btn.Size = size
+	btn.Position = pos
+	btn.Text = ""
+	btn.BackgroundColor3 = COLORS.BrownTile
+	btn.Parent = filterBar
+	roundify(btn, 6)
+	stroke(btn, COLORS.Shadow, 1)
+	btn.ZIndex = 11
+
+	local label = Instance.new("TextLabel")
+	label.Name = "Label"
+	label.Size = UDim2.new(1, -12, 1, 0)
+	label.Position = UDim2.new(0, 6, 0, 0)
+	label.BackgroundTransparency = 1
+	label.Text = ""
+	label.TextColor3 = COLORS.BeigeText
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 14
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = btn
+
+	local placeholderLabel = Instance.new("TextLabel")
+	placeholderLabel.Name = "Placeholder"
+	placeholderLabel.Size = UDim2.new(1, -12, 1, 0)
+	placeholderLabel.Position = UDim2.new(0, 6, 0, 0)
+	placeholderLabel.BackgroundTransparency = 1
+	placeholderLabel.Text = placeholder
+	placeholderLabel.TextColor3 = Color3.fromRGB(220, 210, 190)
+	placeholderLabel.Font = Enum.Font.GothamBold
+	placeholderLabel.TextSize = 14
+	placeholderLabel.TextXAlignment = Enum.TextXAlignment.Left
+	placeholderLabel.Parent = btn
+
+	return btn
 end
 
-local petBox = makeBox("PetFilter", UDim2.new(0, 200, 1, -12), UDim2.new(0, 8, 0, 6), "Pet")
-local rarityBox = makeBox("RarityFilter", UDim2.new(0, 140, 1, -12), UDim2.new(0, 216, 0, 6), "Rarity")
-local minWtBox  = makeBox("MinBaseWt", UDim2.new(0, 110, 1, -12), UDim2.new(0, 366, 0, 6), "Min BaseWt")
-local maxWtBox  = makeBox("MaxBaseWt", UDim2.new(0, 110, 1, -12), UDim2.new(0, 486, 0, 6), "Max BaseWt")
+local petBox = makeDropdownButton("PetFilter", UDim2.new(0, 200, 1, -12), UDim2.new(0, 8, 0, 6), "Pet")
+local rarityBox = makeDropdownButton("RarityFilter", UDim2.new(0, 140, 1, -12), UDim2.new(0, 216, 0, 6), "Rarity")
+
+local minWtBox  = Instance.new("TextBox")
+minWtBox.Name = "MinBaseWt"
+minWtBox.Size = UDim2.new(0, 110, 1, -12)
+minWtBox.Position = UDim2.new(0, 366, 0, 6)
+minWtBox.PlaceholderText = "Min BaseWt"
+minWtBox.Text = ""
+minWtBox.BackgroundColor3 = COLORS.BrownTile
+minWtBox.TextColor3 = COLORS.BeigeText
+minWtBox.PlaceholderColor3 = Color3.fromRGB(220, 210, 190)
+minWtBox.Font = Enum.Font.GothamBold
+minWtBox.TextSize = 14
+minWtBox.ClearTextOnFocus = false
+minWtBox.Parent = filterBar
+roundify(minWtBox, 6)
+stroke(minWtBox, COLORS.Shadow, 1)
+minWtBox.ZIndex = 11
+
+local maxWtBox  = Instance.new("TextBox")
+maxWtBox.Name = "MaxBaseWt"
+maxWtBox.Size = UDim2.new(0, 110, 1, -12)
+maxWtBox.Position = UDim2.new(0, 486, 0, 6)
+maxWtBox.PlaceholderText = "Max BaseWt"
+maxWtBox.Text = ""
+maxWtBox.BackgroundColor3 = COLORS.BrownTile
+maxWtBox.TextColor3 = COLORS.BeigeText
+maxWtBox.PlaceholderColor3 = Color3.fromRGB(220, 210, 190)
+maxWtBox.Font = Enum.Font.GothamBold
+maxWtBox.TextSize = 14
+maxWtBox.ClearTextOnFocus = false
+maxWtBox.Parent = filterBar
+roundify(maxWtBox, 6)
+stroke(maxWtBox, COLORS.Shadow, 1)
+maxWtBox.ZIndex = 11
 
 local sortBtn = Instance.new("TextButton")
 sortBtn.Size = UDim2.new(0, 170, 1, -12)
@@ -1182,11 +1346,11 @@ local petListLayout = Instance.new("UIListLayout")
 petListLayout.Parent = petDropdown
 petListLayout.Padding = UDim.new(0, 4)
 
-local function addPetOption(label, petType)
+local function addPetOption(labelText, petType)
 	local btn = Instance.new("TextButton")
 	btn.Size = UDim2.new(1, -8, 0, 22)
 	btn.Position = UDim2.new(0, 4, 0, 0)
-	btn.Text = label
+	btn.Text = labelText
 	btn.TextColor3 = COLORS.BeigeText
 	btn.Font = Enum.Font.GothamBold
 	btn.TextSize = 12
@@ -1196,13 +1360,15 @@ local function addPetOption(label, petType)
 	stroke(btn, COLORS.Shadow, 1)
 	btn.ZIndex = 51
 	btn.MouseButton1Click:Connect(function()
+		local label, placeholder = getDropdownTextNodes(petBox)
 		if petType then
-			petBox.Text = label
+			label.Text = labelText
 			petBox:SetAttribute("PetType", petType)
 		else
-			petBox.Text = ""
+			label.Text = ""
 			petBox:SetAttribute("PetType", nil)
 		end
+		placeholder.Visible = (label.Text == "")
 		petDropdown.Visible = false
 		buildListings()
 	end)
@@ -1213,20 +1379,8 @@ for _, entry in ipairs(petItems) do
 	addPetOption(entry.displayName, entry.petType)
 end
 
-petBox.Focused:Connect(function()
+petBox.Activated:Connect(function()
 	petDropdown.Visible = true
-end)
-petBox.FocusLost:Connect(function()
-	task.delay(0.1, function()
-		local text = petBox.Text or ""
-		if text == "" then
-			petBox:SetAttribute("PetType", nil)
-		elseif petNameMap[text] then
-			petBox:SetAttribute("PetType", petNameMap[text])
-		end
-		petDropdown.Visible = false
-		buildListings()
-	end)
 end)
 
 -- Rarity dropdown
@@ -1264,20 +1418,16 @@ for _, r in ipairs(rarities) do
 	stroke(btn, COLORS.Shadow, 1)
 	btn.ZIndex = 51
 	btn.MouseButton1Click:Connect(function()
-		rarityBox.Text = r == "Any" and "" or r
+		local label, placeholder = getDropdownTextNodes(rarityBox)
+		label.Text = (r == "Any") and "" or r
+		placeholder.Visible = (label.Text == "")
 		rarityDropdown.Visible = false
 		buildListings()
 	end)
 end
 
-rarityBox.Focused:Connect(function()
+rarityBox.Activated:Connect(function()
 	rarityDropdown.Visible = true
-end)
-rarityBox.FocusLost:Connect(function()
-	task.delay(0.1, function()
-		rarityDropdown.Visible = false
-		buildListings()
-	end)
 end)
 
 minWtBox.FocusLost:Connect(function()
@@ -1337,17 +1487,6 @@ layout.Padding = UDim.new(0, 6)
 layout.Parent = list
 
 -- Webhooks tab
-local webhooksTitle = Instance.new("TextLabel")
-webhooksTitle.Size = UDim2.new(1, -200, 0, 40)
-webhooksTitle.Position = UDim2.new(0, 186, 0, 12)
-webhooksTitle.Text = "Webhook Settings"
-webhooksTitle.TextColor3 = COLORS.BeigeText
-webhooksTitle.BackgroundTransparency = 1
-webhooksTitle.Font = Enum.Font.GothamBlack
-webhooksTitle.TextSize = 22
-webhooksTitle.TextXAlignment = Enum.TextXAlignment.Left
-webhooksTitle.Parent = webhooksTab
-
 webhookInput = Instance.new("TextBox")
 webhookInput.Size = UDim2.new(0, 520, 0, 44)
 webhookInput.Position = UDim2.new(0, 186, 0, 60)
@@ -1372,8 +1511,7 @@ webhookSave.Font = Enum.Font.GothamBlack
 webhookSave.TextSize = 14
 webhookSave.BackgroundColor3 = COLORS.GreenLight
 webhookSave.Parent = webhooksTab
-roundify(webhookSave, 8)
-stroke(webhookSave, COLORS.Shadow, 1)
+applyGameButtonStyle(webhookSave)
 
 local webhookStatus = Instance.new("TextLabel")
 webhookStatus.Size = UDim2.new(1, -200, 0, 22)
@@ -1529,7 +1667,8 @@ function buildListings()
 		end
 	end
 
-	local rarityFilter = string.lower(rarityBox.Text or "")
+	local rarityLabel, _ = getDropdownTextNodes(rarityBox)
+	local rarityFilter = string.lower((rarityLabel and rarityLabel.Text or ""))
 	local selectedPetType = petBox:GetAttribute("PetType")
 	local minBaseWt = parseNumber(minWtBox.Text)
 	local maxBaseWt = parseNumber(maxWtBox.Text)
@@ -1600,15 +1739,28 @@ sortBtn.Activated:Connect(function()
 	buildListings()
 end)
 
+local blur = Lighting:FindFirstChild("PetMarketBlur") or Instance.new("BlurEffect")
+blur.Name = "PetMarketBlur"
+blur.Size = 0
+blur.Parent = Lighting
+
 openBtn.Activated:Connect(function()
 	local saved = playerGui:GetAttribute("WebhookUrl")
-	webhookInput.Text = saved or webhookInput.Text
-	marketFrame.Visible = true
-	buildListings()
+	if webhookInput then
+		webhookInput.Text = saved or webhookInput.Text
+	end
+	if marketFrame then
+		marketFrame.Visible = true
+	end
+	blur.Size = 8
+	pcall(function()
+		buildListings()
+	end)
 end)
 
 closeBtn.Activated:Connect(function()
 	marketFrame.Visible = false
+	blur.Size = 0
 end)
 
 -- Backpack watcher -> webhook
@@ -1641,16 +1793,19 @@ player.Backpack.ChildAdded:Connect(function(child)
 	end
 
 	local iconUrl = getPetIcon(pending.petType)
+	local priceText = pending.price and NumberUtil.Comma(pending.price) or "N/A"
+
 	local embed = {
-		title = "✅ Pet Purchased",
-		color = 0x6BCB5A,
+		title = "✅ Purchase Confirmed",
+		description = ("**%s** has been added to your inventory."):format(petName or "Pet"),
+		color = 0x6EA8FF,
 		fields = {
 			{ name = "Pet", value = petName or "Unknown", inline = true },
 			{ name = "Rarity", value = getRarityEmoji(pending.petType), inline = true },
 			{ name = "Age", value = tostring(age or "N/A"), inline = true },
 			{ name = "Weight", value = weight and (tostring(weight) .. " KG") or "N/A", inline = true },
 			{ name = "Base Weight", value = pending.baseWeight and (tostring(pending.baseWeight) .. " KG") or "N/A", inline = true },
-			{ name = "Price", value = pending.price and NumberUtil.Comma(pending.price) or "N/A", inline = true }
+			{ name = "Price", value = "🟢 **" .. priceText .. "**", inline = true }
 		},
 		timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
 	}
